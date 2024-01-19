@@ -35,7 +35,7 @@ class RegistrationResource(resource.Resource):
         self.xsl = open('%s/style.xsl' % webDir).read()
         self.config = config
         self.webDir = webDir
-        self.cipher = Blowfish.new(binascii.a2b_hex(self.config.cipherKey))
+        self.cipher = Blowfish.new(binascii.a2b_hex(self.config.cipherKey), Blowfish.MODE_ECB)
 
     def render_GET(self, request):
         if request.path == b'/xsl/style.xsl':
@@ -128,7 +128,7 @@ class RegistrationResource(resource.Resource):
         nonce = request.args[b'nonce'][0].decode('utf-8')
         try: fmt = request.args[b'format'][0].decode('utf-8')
         except: fmt = None
-        #userKey = '%s-%s' % (
+        #userKey = '%s-%s' % (qqqqqqqqqqqqqqqqq
         #        binascii.b2a_hex(
         #            self.cipher.encrypt(util.padWithZeros(serial,24))),
         #        binascii.b2a_hex(
