@@ -10,7 +10,7 @@ function makeHash() {
         return false;
     }
     document.getElementById('serial').value = a;
-    while(a.length<16) { a += '\0'; }
+    while(a.length<36) { a += '\0'; }
     u = document.getElementById('username').value;
     u = u.replace(/^\s+/,'').replace(/\s+$/,'');
     if (u.length<3 || !u.match(/^[0-9a-zA-Z]+$/)) {
