@@ -427,6 +427,14 @@ class LoginService(PacketDispatcher):
     def do_3120(self, pkt):
         self.sendZeros(0x3121,4)
         self.sendZeros(0x3123,0)
+    def do_9100(self, pkt):
+        self.sendZeros(0x9103,0)
+
+    def do_9104(self, pkt):
+        self.sendZeros(0x9104,4)
+
+    def do_9300(self, pkt):
+        self.sendZeros(0x9301,4)
 
     def disconnect_0003(self, pkt):
         # disconnect (no reply needed)
@@ -452,6 +460,9 @@ class LoginService(PacketDispatcher):
         self.addHandler(0x3090, self.do_3090)
         self.addHandler(0x3100, self.do_3100)
         self.addHandler(0x3120, self.do_3120)
+        self.addHandler(0x9100, self.do_9100)
+        self.addHandler(0x9104, self.do_9104)
+        self.addHandler(0x9300, self.do_9300)
         self.addHandler(0x0003, self.disconnect_0003)
 
 
