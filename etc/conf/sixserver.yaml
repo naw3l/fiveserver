@@ -10,15 +10,17 @@ ListenOn: ""
 IpDetectUri: "http://mapote.com/cgi-bin/ip.py"
 
 Lobbies:
-    - 'Liga'
-    - 'Copa'
-    - 'Mundial'
-    - name: 'Test1'
+    - 'Basico'
+    - name: 'A'
       type: ['A']
-    - name: 'Test2'
-      type: ['B']
-    - name: 'Test3'
-      type: ['C']
+    - name: '3B'
+      type: ['3B']
+    - name: '3A'
+      type: ['3A']
+    - name: '2'
+      type: ['2']
+    - name: '1'
+      type: ['1']
     - name: 'Entrenamiento'
       type: noStats
       showMatches: False
@@ -89,4 +91,4 @@ y el Indio Solari\n\
 \n\
 Credits:\r\n\
 Fix Blowfish: favascript, pinfake\n\
-Codigo Original: reddwarf, juce\n\
+Codigo Original: reddwarf, juce"
