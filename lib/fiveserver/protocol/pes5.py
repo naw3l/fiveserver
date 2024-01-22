@@ -429,12 +429,33 @@ class LoginService(PacketDispatcher):
         self.sendZeros(0x3123,0)
     def do_9100(self, pkt):
         self.sendZeros(0x9103,0)
+        log.msg('do_9100 %s' % pkt)
 
     def do_9104(self, pkt):
+        #(0x9104,0,26)
+        self.sendZeros(0x9101,4)
+        self.sendZeros(0x9101,0)
+        self.sendZeros(0x9101,1)
+        self.sendZeros(0x9102,4)
+        self.sendZeros(0x9102,0)
+        self.sendZeros(0x9102,1)
+        self.sendZeros(0x9103,4)
+        self.sendZeros(0x9103,0)
+        self.sendZeros(0x9103,1)
         self.sendZeros(0x9104,4)
+        self.sendZeros(0x9104,0)
+        self.sendZeros(0x9104,1)
+        self.sendZeros(0x9105,4)
+        self.sendZeros(0x9105,0)
+        self.sendZeros(0x9105,1)
+        log.msg('do_9104 %s' % pkt)
 
     def do_9300(self, pkt):
-        self.sendZeros(0x9301,4)
+        self.sendData(0x9303,b'\xff\xff\xff\x10')
+        self.sendZeros(0x9301,0)
+        self.sendZeros(0x9302,0)
+        self.sendZeros(0x9303,0)
+        log.msg('do_9300 %s' % pkt)
 
     def disconnect_0003(self, pkt):
         # disconnect (no reply needed)
@@ -460,9 +481,6 @@ class LoginService(PacketDispatcher):
         self.addHandler(0x3090, self.do_3090)
         self.addHandler(0x3100, self.do_3100)
         self.addHandler(0x3120, self.do_3120)
-        self.addHandler(0x9100, self.do_9100)
-        self.addHandler(0x9104, self.do_9104)
-        self.addHandler(0x9300, self.do_9300)
         self.addHandler(0x0003, self.disconnect_0003)
 
 
@@ -860,6 +878,9 @@ class NetworkMenuService(LoginService):
         self.addHandler(0x4780, self.getInboxMessages_4780)
         self.addHandler(0x4a00, self.quickMatchSearch_4a00)
         self.addHandler(0x0003, self.disconnect_0003)
+        self.addHandler(0x9100, self.do_9100)
+        self.addHandler(0x9104, self.do_9104)
+        self.addHandler(0x9300, self.do_9300)
 
 
 class MainService(NetworkMenuService):
