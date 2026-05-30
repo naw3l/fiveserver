@@ -5,6 +5,7 @@ Data-layer
 from twisted.internet import defer
 from datetime import timedelta
 from fiveserver.model import user
+from fiveserver import log
 
 
 class UserData:
@@ -243,7 +244,7 @@ class ProfileData:
 
     @defer.inlineCallbacks
     def findByName(self, profileName):
-        print("findByName:",profileName)
+        log.debug('ProfileData.findByName: %s' % profileName)
         sql = ('SELECT id,user_id,ordinal,name,fav_player,fav_team,'
                '`rank`,points,disconnects,updated_on,seconds_played '
                'FROM profiles WHERE deleted = 0 AND name = %s')
@@ -262,7 +263,32 @@ class ProfileData:
             p.updatedOn = row[9]
             p.playTime = timedelta(seconds=row[10])
             results.append(p)
-        print(results)
+        defer.returnValue(results)
+
+    @defer.inlineCallbacks
+    def findByNameLike(self, prefix, limit=20):
+        """Prefix search: returns profiles whose name starts with prefix."""
+        log.debug('ProfileData.findByNameLike: %s' % prefix)
+        sql = ('SELECT id,user_id,ordinal,name,fav_player,fav_team,'
+               '`rank`,points,disconnects,updated_on,seconds_played '
+               'FROM profiles WHERE deleted = 0 AND name LIKE %s '
+               'ORDER BY name LIMIT %s')
+        rows = yield self.dbController.dbRead(
+            0, sql, prefix.replace('%', r'\%').replace('_', r'\_') + '%', limit)
+        results = []
+        for row in rows:
+            p = user.Profile(row[2])
+            p.id = row[0]
+            p.userId = row[1]
+            p.name = row[3]
+            p.favPlayer = row[4]
+            p.favTeam = row[5]
+            p.rank = row[6]
+            p.points = row[7]
+            p.disconnects = row[8]
+            p.updatedOn = row[9]
+            p.playTime = timedelta(seconds=row[10])
+            results.append(p)
         defer.returnValue(results)
 
     @defer.inlineCallbacks
@@ -411,4 +437,108 @@ class MatchData:
             _writeStreak(match.home_profile.id, False)
             _writeStreak(match.away_profile.id, False)
         return matchId
+
+
+class FriendsData:
+
+    def __init__(self, dbController):
+        self.dbController = dbController
+
+    @defer.inlineCallbacks
+    def getFriends(self, profileId):
+        """Return list of (profile_id, name) for all friends of profileId."""
+        sql = ('SELECT p.id, p.name FROM friends f '
+               'JOIN profiles p ON p.id = f.friend_profile_id '
+               'WHERE f.profile_id = %s AND p.deleted = 0')
+        rows = yield self.dbController.dbRead(0, sql, profileId)
+        defer.returnValue(rows)
+
+    @defer.inlineCallbacks
+    def addFriend(self, profileId, friendProfileId):
+        sql = ('INSERT IGNORE INTO friends (profile_id, friend_profile_id) '
+               'VALUES (%s, %s)')
+        yield self.dbController.dbWrite(0, sql, profileId, friendProfileId)
+        defer.returnValue(True)
+
+    @defer.inlineCallbacks
+    def removeFriend(self, profileId, friendProfileId):
+        sql = ('DELETE FROM friends WHERE profile_id=%s '
+               'AND friend_profile_id=%s')
+        yield self.dbController.dbWrite(0, sql, profileId, friendProfileId)
+        defer.returnValue(True)
+
+    @defer.inlineCallbacks
+    def getBlocked(self, profileId):
+        """Return list of (profile_id, name) for all profiles blocked by profileId."""
+        sql = ('SELECT p.id, p.name FROM blocked b '
+               'JOIN profiles p ON p.id = b.blocked_profile_id '
+               'WHERE b.profile_id = %s AND p.deleted = 0')
+        rows = yield self.dbController.dbRead(0, sql, profileId)
+        defer.returnValue(rows)
+
+    @defer.inlineCallbacks
+    def addBlocked(self, profileId, blockedProfileId):
+        sql = ('INSERT IGNORE INTO blocked (profile_id, blocked_profile_id) '
+               'VALUES (%s, %s)')
+        yield self.dbController.dbWrite(0, sql, profileId, blockedProfileId)
+        defer.returnValue(True)
+
+    @defer.inlineCallbacks
+    def removeBlocked(self, profileId, blockedProfileId):
+        sql = ('DELETE FROM blocked WHERE profile_id=%s '
+               'AND blocked_profile_id=%s')
+        yield self.dbController.dbWrite(0, sql, profileId, blockedProfileId)
+        defer.returnValue(True)
+
+    @defer.inlineCallbacks
+    def isBlocked(self, profileId, targetProfileId):
+        """True if profileId has blocked targetProfileId."""
+        sql = ('SELECT count(*) FROM blocked '
+               'WHERE profile_id=%s AND blocked_profile_id=%s')
+        rows = yield self.dbController.dbRead(0, sql, profileId, targetProfileId)
+        defer.returnValue(rows[0][0] > 0)
+
+
+class MessageData:
+
+    def __init__(self, dbController):
+        self.dbController = dbController
+
+    @defer.inlineCallbacks
+    def getMessages(self, profileId):
+        """
+        Return undeleted messages for profileId.
+        Each row: (id, from_profile_id, from_name, subject, body, read_flag, sent_on)
+        """
+        sql = ('SELECT m.id, m.from_profile_id, '
+               'COALESCE(p.name, "SYSTEM") as from_name, '
+               'm.subject, m.body, m.read_flag, m.sent_on '
+               'FROM messages m '
+               'LEFT JOIN profiles p ON p.id = m.from_profile_id '
+               'WHERE m.to_profile_id = %s '
+               'ORDER BY m.sent_on DESC')
+        rows = yield self.dbController.dbRead(0, sql, profileId)
+        defer.returnValue(rows)
+
+    @defer.inlineCallbacks
+    def sendMessage(self, toProfileId, fromProfileId, subject, body):
+        sql = ('INSERT INTO messages '
+               '(to_profile_id, from_profile_id, subject, body) '
+               'VALUES (%s, %s, %s, %s)')
+        yield self.dbController.dbWrite(
+            0, sql, toProfileId, fromProfileId, subject, body)
+        defer.returnValue(True)
+
+    @defer.inlineCallbacks
+    def markRead(self, messageId, profileId):
+        sql = ('UPDATE messages SET read_flag=1 '
+               'WHERE id=%s AND to_profile_id=%s')
+        yield self.dbController.dbWrite(0, sql, messageId, profileId)
+        defer.returnValue(True)
+
+    @defer.inlineCallbacks
+    def deleteMessage(self, messageId, profileId):
+        sql = ('DELETE FROM messages WHERE id=%s AND to_profile_id=%s')
+        yield self.dbController.dbWrite(0, sql, messageId, profileId)
+        defer.returnValue(True)
 

@@ -37,9 +37,12 @@ keepAliveManager.start()
 userData = data.UserData(storageController)
 profileData = data.ProfileData(storageController)
 matchData = data.MatchData(storageController)
+friendsData = data.FriendsData(storageController)
+messageData = data.MessageData(storageController)
 profileLogic = logic.ProfileLogic(matchData, profileData)
 config = FiveServerConfig(
-    scfg, dbConfig, userData, profileData, matchData, profileLogic)
+    scfg, dbConfig, userData, profileData, matchData, profileLogic,
+    friendsData=friendsData, messageData=messageData)
 
 for gameName,port in scfg.GamePorts.items():
     factory = PacketServiceFactory(config)
@@ -108,6 +111,7 @@ adminRoot.putChild(
     b'ban-remove', admin.BanRemoveResource(adminConfig, config))
 adminRoot.putChild(b'server-ip', admin.ServerIpResource(adminConfig, config))
 adminRoot.putChild(b'ps', admin.ProcessInfoResource(adminConfig, config))
+adminRoot.putChild(b'send-message', admin.SendMessageResource(adminConfig, config))
 adminServer = Site(adminRoot)
 reactor.listenSSL(adminConfig.AdminPort, adminServer, ServerContextFactory(),
     interface=config.interface)

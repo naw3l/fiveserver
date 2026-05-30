@@ -1,6 +1,37 @@
 import math
 
 
+ELO_DEFAULT = 1000
+ELO_K = 32          # max points exchanged per match
+ELO_MAX = 9999      # cap so it fits in a !H (unsigned short, max 65535)
+
+
+def computeElo(home_rating, away_rating, home_score, away_score):
+    """
+    Standard Elo update for a single match.
+
+    Returns (new_home_rating, new_away_rating).
+
+    result from home perspective: 1 = win, 0.5 = draw, 0 = loss.
+    """
+    expected_home = 1.0 / (1.0 + 10 ** ((away_rating - home_rating) / 400.0))
+    expected_away = 1.0 - expected_home
+
+    if home_score > away_score:
+        actual_home, actual_away = 1.0, 0.0
+    elif home_score < away_score:
+        actual_home, actual_away = 0.0, 1.0
+    else:
+        actual_home, actual_away = 0.5, 0.5
+
+    new_home = int(round(home_rating + ELO_K * (actual_home - expected_home)))
+    new_away = int(round(away_rating + ELO_K * (actual_away - expected_away)))
+
+    new_home = max(0, min(ELO_MAX, new_home))
+    new_away = max(0, min(ELO_MAX, new_away))
+    return new_home, new_away
+
+
 class RatingMath:
     """
     Utility class used to calculate user points, based

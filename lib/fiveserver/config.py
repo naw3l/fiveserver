@@ -152,13 +152,17 @@ class FiveServerConfig:
     
 
     def __init__(self, serverConfig, dbConfig,
-                 userData, profileData, matchData, profileLogic):
+                 userData, profileData, matchData, profileLogic,
+                 cupData=None, friendsData=None, messageData=None):
         self.serverConfig = serverConfig
         self.dbConfig = dbConfig
         self.userData = userData
         self.profileData = profileData
         self.matchData = matchData
         self.profileLogic = profileLogic
+        self.cupData = cupData        # None for PES5; CupData for PES6
+        self.friendsData = friendsData
+        self.messageData = messageData
 
         self.cipherKey = ('27501fd04e6b82c831024dac5c6305221974deb9388a2190'
                           '1d576cbbe2f377ef23d75486010f37819afe6c321a0146d2'
@@ -221,7 +225,7 @@ class FiveServerConfig:
         try: 
             self.ipDetectUri = self.serverConfig.IpDetectUri
         except AttributeError:
-            self.ipDetectUri = 'http://mapote.com/cgi-bin/ip.py'
+            self.ipDetectUri = 'https://api.ipify.org'
 
         # rating/points calculator
         self.ratingMath = rating.RatingMath(0.44, 0.56)

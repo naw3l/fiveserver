@@ -132,6 +132,8 @@ class AdminRootResource(BaseXmlResource):
                 <banned href="/banned"/>\
                 <server-ip href="/server-ip"/>\
                 <processInfo href="/ps"/>\
+                <cups href="/cups"/>\
+                <sendMessage href="/send-message"/>\
                 </adminService>' % (
                         XML_HEADER, 
                         self.config.VERSION,
@@ -761,6 +763,368 @@ class RosterResource(BaseXmlResource):
             request.setHeader('Content-Type','text/xml')
             return ('%s<error text="missing or incorrect parameters" '
                     'href="/home"/>' % XML_HEADER).encode('utf-8')
+
+
+class SendMessageResource(BaseXmlResource):
+    """Send an inbox message to a player by profile name. GET/POST /send-message"""
+
+    isLeaf = True
+
+    def render_GET(self, request):
+        request.setHeader('Content-Type', 'text/html')
+        return b'''<html><head><title>Send Message</title></head><body>
+<h3>Send Inbox Message</h3>
+<form method="POST">
+To (profile name): <input name="to_name" type="text" size="32"/><br/>
+Subject: <input name="subject" type="text" size="64"/><br/>
+Body:<br/><textarea name="body" rows="6" cols="60"></textarea><br/>
+<input type="submit" value="Send"/>
+</form></body></html>'''
+
+    def render_POST(self, request):
+        def _sent(_):
+            request.setHeader('Content-Type', 'text/xml')
+            request.write(('%s<actionAccepted href="/home"/>' % XML_HEADER).encode('utf-8'))
+            request.finish()
+
+        def _gotProfile(profiles):
+            if not profiles:
+                request.setResponseCode(404)
+                request.setHeader('Content-Type', 'text/xml')
+                request.write(('%s<error text="profile not found"/>' % XML_HEADER).encode('utf-8'))
+                request.finish()
+                return
+            to_profile = profiles[0]
+            d = self.config.messageData.sendMessage(
+                to_profile.id, None, subject, body)
+            d.addCallback(_sent)
+            d.addErrback(self.renderError, request)
+
+        try:
+            to_name = request.args[b'to_name'][0].decode('utf-8')
+            subject = request.args.get(b'subject', [b''])[0].decode('utf-8')[:64]
+            body = request.args.get(b'body', [b''])[0].decode('utf-8')[:512]
+        except (KeyError, UnicodeDecodeError):
+            request.setResponseCode(400)
+            return ('%s<error text="to_name required"/>' % XML_HEADER).encode('utf-8')
+
+        if not self.config.messageData:
+            request.setResponseCode(503)
+            return ('%s<error text="messaging not available"/>' % XML_HEADER).encode('utf-8')
+
+        d = self.config.profileData.findByName(to_name)
+        d.addCallback(_gotProfile)
+        d.addErrback(self.renderError, request)
+        return server.NOT_DONE_YET
+
+
+class CupsResource(BaseXmlResource):
+    """List cups and create new cups. GET /cups, POST /cups"""
+
+    isLeaf = False
+
+    def render_GET(self, request):
+        def _render(rows):
+            cups = domish.Element((None, 'cups'))
+            cups['href'] = '/home'
+            cups['create-href'] = '/cups'
+            for row in rows:
+                id, name, cup_type, status, created_on, finished_on = row
+                e = cups.addElement('cup')
+                e['id'] = str(id)
+                e['name'] = escape(name)
+                e['type'] = cup_type
+                e['status'] = status
+                e['created'] = str(created_on)
+                e['href'] = '/cups/%d' % id
+                if finished_on:
+                    e['finished'] = str(finished_on)
+            request.setHeader('Content-Type', 'text/xml')
+            request.write(('%s%s' % (XML_HEADER, cups.toXml())).encode('utf-8'))
+            request.finish()
+        d = self.config.cupData.listCups()
+        d.addCallback(_render)
+        d.addErrback(self.renderError, request)
+        return server.NOT_DONE_YET
+
+    def render_POST(self, request):
+        def _render(cup_id):
+            request.setHeader('Content-Type', 'text/xml')
+            request.write(('%s<cupCreated id="%d" href="/cups/%d"/>' % (
+                XML_HEADER, cup_id, cup_id)).encode('utf-8'))
+            request.finish()
+        try:
+            name = request.args[b'name'][0].decode('utf-8')
+            cup_type = request.args.get(b'type', [b'winnerscup'])[0].decode('utf-8')
+            if cup_type not in ('competition', 'winnerscup'):
+                cup_type = 'winnerscup'
+        except (KeyError, UnicodeDecodeError):
+            request.setResponseCode(400)
+            request.setHeader('Content-Type', 'text/xml')
+            return ('%s<error text="name parameter required"/>' % XML_HEADER).encode('utf-8')
+        d = self.config.cupData.createCup(name, cup_type)
+        d.addCallback(_render)
+        d.addErrback(self.renderError, request)
+        return server.NOT_DONE_YET
+
+    def getChildWithDefault(self, path, request):
+        try:
+            cup_id = int(path)
+            return CupDetailResource(self.adminConfig, self.config, cup_id)
+        except (ValueError, TypeError):
+            return resource.NoResource()
+
+
+class CupDetailResource(BaseXmlResource):
+    """Show bracket and participants for a single cup. GET /cups/{id}"""
+
+    isLeaf = False
+
+    def __init__(self, adminConfig, config, cup_id):
+        BaseXmlResource.__init__(self, adminConfig, config)
+        self.cup_id = cup_id
+
+    def render_GET(self, request):
+        d = defer.gatherResults([
+            self.config.cupData.getCupById(self.cup_id),
+            self.config.cupData.getCupParticipants(self.cup_id),
+            self.config.cupData.getCupMatches(self.cup_id),
+        ])
+
+        def _render(results):
+            cup_row, participants, matches = results
+            if cup_row is None:
+                request.setResponseCode(404)
+                request.write(('%s<error text="cup not found"/>' % XML_HEADER).encode('utf-8'))
+                request.finish()
+                return
+            id, name, cup_type, status, created_on, finished_on = cup_row
+            cup = domish.Element((None, 'cup'))
+            cup['id'] = str(id)
+            cup['name'] = escape(name)
+            cup['type'] = cup_type
+            cup['status'] = status
+            cup['created'] = str(created_on)
+            cup['add-participant-href'] = '/cups/%d/add' % id
+            if status == 'open':
+                cup['activate-href'] = '/cups/%d/activate' % id
+            if finished_on:
+                cup['finished'] = str(finished_on)
+
+            ps = cup.addElement('participants')
+            for profile_id, pname, points, pstatus in participants:
+                e = ps.addElement('participant')
+                e['profile-id'] = str(profile_id)
+                e['name'] = escape(pname)
+                e['points'] = str(points)
+                e['status'] = pstatus
+                e['remove-href'] = '/cups/%d/remove?profile_id=%d' % (id, profile_id)
+
+            bracket = cup.addElement('bracket')
+            for row in matches:
+                (mid, cup_id, match_id, rnd,
+                 home_id, away_id, winner_id, mstatus, played_on) = row
+                e = bracket.addElement('match')
+                e['id'] = str(mid)
+                e['round'] = str(rnd)
+                e['home-profile-id'] = str(home_id)
+                e['away-profile-id'] = str(away_id)
+                e['status'] = mstatus
+                if winner_id:
+                    e['winner-profile-id'] = str(winner_id)
+                if match_id:
+                    e['match-id'] = str(match_id)
+                if played_on:
+                    e['played-on'] = str(played_on)
+                if mstatus == 'pending':
+                    e['walkover-href'] = (
+                        '/cups/%d/walkover?cup_match_id=%d' % (id, mid))
+
+            request.setHeader('Content-Type', 'text/xml')
+            request.write(('%s%s' % (XML_HEADER, cup.toXml())).encode('utf-8'))
+            request.finish()
+
+        d.addCallback(_render)
+        d.addErrback(self.renderError, request)
+        return server.NOT_DONE_YET
+
+    def getChildWithDefault(self, path, request):
+        if path == b'add':
+            return CupAddParticipantResource(
+                self.adminConfig, self.config, self.cup_id)
+        if path == b'remove':
+            return CupRemoveParticipantResource(
+                self.adminConfig, self.config, self.cup_id)
+        if path == b'activate':
+            return CupActivateResource(
+                self.adminConfig, self.config, self.cup_id)
+        if path == b'walkover':
+            return CupWalkoverResource(
+                self.adminConfig, self.config, self.cup_id)
+        return resource.NoResource()
+
+
+class CupAddParticipantResource(BaseXmlResource):
+    """Add a player to a cup. GET shows form, POST adds. /cups/{id}/add"""
+
+    isLeaf = True
+
+    def __init__(self, adminConfig, config, cup_id):
+        BaseXmlResource.__init__(self, adminConfig, config)
+        self.cup_id = cup_id
+
+    def render_GET(self, request):
+        request.setHeader('Content-Type', 'text/html')
+        return ('''<html><head><title>Add Cup Participant</title></head><body>
+<h3>Add participant to cup %d</h3>
+<form method="POST">
+Profile name: <input name="profile_name" type="text" size="32"/>
+<input type="submit" value="Add"/>
+</form></body></html>''' % self.cup_id).encode('utf-8')
+
+    def render_POST(self, request):
+        def _added(_):
+            request.setHeader('Content-Type', 'text/xml')
+            request.write(('%s<actionAccepted href="/cups/%d"/>' % (
+                XML_HEADER, self.cup_id)).encode('utf-8'))
+            request.finish()
+
+        def _gotProfile(profiles):
+            if not profiles:
+                request.setResponseCode(404)
+                request.setHeader('Content-Type', 'text/xml')
+                request.write(('%s<error text="profile not found"/>' % XML_HEADER).encode('utf-8'))
+                request.finish()
+                return
+            profile = profiles[0]
+            d = self.config.cupData.addParticipant(self.cup_id, profile.id)
+            d.addCallback(_added)
+            d.addErrback(self.renderError, request)
+
+        try:
+            profile_name = request.args[b'profile_name'][0].decode('utf-8')
+        except (KeyError, UnicodeDecodeError):
+            request.setResponseCode(400)
+            return ('%s<error text="profile_name required"/>' % XML_HEADER).encode('utf-8')
+        d = self.config.profileData.findByName(profile_name)
+        d.addCallback(_gotProfile)
+        d.addErrback(self.renderError, request)
+        return server.NOT_DONE_YET
+
+
+class CupRemoveParticipantResource(BaseXmlResource):
+    """Remove a player from a cup. POST /cups/{id}/remove?profile_id=N"""
+
+    isLeaf = True
+
+    def __init__(self, adminConfig, config, cup_id):
+        BaseXmlResource.__init__(self, adminConfig, config)
+        self.cup_id = cup_id
+
+    def render_GET(self, request):
+        try:
+            profile_id = int(request.args[b'profile_id'][0])
+        except (KeyError, ValueError):
+            return ('%s<error text="profile_id required"/>' % XML_HEADER).encode('utf-8')
+        request.setHeader('Content-Type', 'text/html')
+        return ('''<html><head><title>Remove Cup Participant</title></head><body>
+<h3>Remove profile %d from cup %d?</h3>
+<form method="POST">
+<input type="hidden" name="profile_id" value="%d"/>
+<input type="submit" value="Remove"/>
+</form></body></html>''' % (profile_id, self.cup_id, profile_id)).encode('utf-8')
+
+    def render_POST(self, request):
+        def _done(_):
+            request.setHeader('Content-Type', 'text/xml')
+            request.write(('%s<actionAccepted href="/cups/%d"/>' % (
+                XML_HEADER, self.cup_id)).encode('utf-8'))
+            request.finish()
+        try:
+            profile_id = int(request.args[b'profile_id'][0])
+        except (KeyError, ValueError):
+            request.setResponseCode(400)
+            return ('%s<error text="profile_id required"/>' % XML_HEADER).encode('utf-8')
+        d = self.config.cupData.removeParticipant(self.cup_id, profile_id)
+        d.addCallback(_done)
+        d.addErrback(self.renderError, request)
+        return server.NOT_DONE_YET
+
+
+class CupActivateResource(BaseXmlResource):
+    """Activate a cup (lock roster and generate bracket). POST /cups/{id}/activate"""
+
+    isLeaf = True
+
+    def __init__(self, adminConfig, config, cup_id):
+        BaseXmlResource.__init__(self, adminConfig, config)
+        self.cup_id = cup_id
+
+    def render_GET(self, request):
+        request.setHeader('Content-Type', 'text/html')
+        return ('''<html><head><title>Activate Cup</title></head><body>
+<h3>Activate cup %d? (locks roster and generates bracket)</h3>
+<form method="POST">
+<input type="submit" value="Activate"/>
+</form></body></html>''' % self.cup_id).encode('utf-8')
+
+    def render_POST(self, request):
+        def _done(ok):
+            if not ok:
+                request.setResponseCode(400)
+                request.setHeader('Content-Type', 'text/xml')
+                request.write(('%s<error text="need at least 2 participants"/>' % XML_HEADER).encode('utf-8'))
+                request.finish()
+                return
+            request.setHeader('Content-Type', 'text/xml')
+            request.write(('%s<actionAccepted href="/cups/%d"/>' % (
+                XML_HEADER, self.cup_id)).encode('utf-8'))
+            request.finish()
+        d = self.config.cupData.activateCup(self.cup_id)
+        d.addCallback(_done)
+        d.addErrback(self.renderError, request)
+        return server.NOT_DONE_YET
+
+
+class CupWalkoverResource(BaseXmlResource):
+    """Grant a walkover win in a cup match. GET form, POST /cups/{id}/walkover?cup_match_id=N"""
+
+    isLeaf = True
+
+    def __init__(self, adminConfig, config, cup_id):
+        BaseXmlResource.__init__(self, adminConfig, config)
+        self.cup_id = cup_id
+
+    def render_GET(self, request):
+        try:
+            cup_match_id = int(request.args[b'cup_match_id'][0])
+        except (KeyError, ValueError):
+            return ('%s<error text="cup_match_id required"/>' % XML_HEADER).encode('utf-8')
+        request.setHeader('Content-Type', 'text/html')
+        return ('''<html><head><title>Cup Walkover</title></head><body>
+<h3>Grant walkover for cup match %d</h3>
+<form method="POST">
+<input type="hidden" name="cup_match_id" value="%d"/>
+Winner profile id: <input name="winner_profile_id" type="text" size="12"/>
+<input type="submit" value="Grant Walkover"/>
+</form></body></html>''' % (cup_match_id, cup_match_id)).encode('utf-8')
+
+    def render_POST(self, request):
+        def _done(_):
+            request.setHeader('Content-Type', 'text/xml')
+            request.write(('%s<actionAccepted href="/cups/%d"/>' % (
+                XML_HEADER, self.cup_id)).encode('utf-8'))
+            request.finish()
+        try:
+            cup_match_id = int(request.args[b'cup_match_id'][0])
+            winner_profile_id = int(request.args[b'winner_profile_id'][0])
+        except (KeyError, ValueError):
+            request.setResponseCode(400)
+            return ('%s<error text="cup_match_id and winner_profile_id required"/>' % XML_HEADER).encode('utf-8')
+        d = self.config.cupData.walkover(cup_match_id, winner_profile_id)
+        d.addCallback(_done)
+        d.addErrback(self.renderError, request)
+        return server.NOT_DONE_YET
 
 
 class ProcessInfoResource(BaseXmlResource):

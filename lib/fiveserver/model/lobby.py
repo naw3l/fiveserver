@@ -115,7 +115,7 @@ class Lobby:
         return None
         
     def isRoom(self, name):
-        return self.rooms.has_key(name)
+        return name in self.rooms
 
     def enter(self, usr, lobbyConnection):
         usr.lobbyConnection = lobbyConnection
@@ -148,19 +148,23 @@ class Room:
         self.participatingPlayers = list()
         self.phase = 1 # Phase of room and used in 0x4344
 
-    def __cmp__(self, another):
+    def __lt__(self, another):
         if another is None:
-            return -1
+            return True
         if isinstance(another, Room):
             if self.match is not None and another.match is not None:
                 if self.match.startDatetime is None:
-                    return 1
+                    return False
                 if another.match.startDatetime is None:
-                    return -1
-                return -cmp(
-                    self.match.startDatetime,
-                    another.match.startDatetime)
-        return 0
+                    return True
+                # newer start time sorts first
+                return self.match.startDatetime > another.match.startDatetime
+        return False
+
+    def __eq__(self, another):
+        if not isinstance(another, Room):
+            return False
+        return self is another
 
     def enter(self, usr):
         usr.state.inRoom = 1
@@ -399,6 +403,11 @@ class Match6:
         self.startDatetime = None
         self.home_exit = None
         self.away_exit = None
+        # points before/after the match, keyed by profile id
+        self.old_points = {}
+        self.new_points = {}
+        self.old_rating = {}
+        self.new_rating = {}
 
     def getScoreHome(self):
         return (

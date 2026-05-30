@@ -15,7 +15,7 @@ from fiveserver.protocol import PacketServiceFactory
 from fiveserver.protocol import pes5, pes6
 from fiveserver.register import RegistrationResource
 from fiveserver import storagecontroller, log
-from fiveserver import admin, data6, logic
+from fiveserver import admin, data, data6, logic
 import os
 
 
@@ -37,9 +37,13 @@ keepAliveManager.start()
 userData = data6.UserData(storageController)
 profileData = data6.ProfileData(storageController)
 matchData = data6.MatchData(storageController)
+cupData = data6.CupData(storageController)
+friendsData = data.FriendsData(storageController)
+messageData = data.MessageData(storageController)
 profileLogic = logic.ProfileLogic(matchData, profileData)
 config = FiveServerConfig(
-    scfg, dbConfig, userData, profileData, matchData, profileLogic)
+    scfg, dbConfig, userData, profileData, matchData, profileLogic,
+    cupData=cupData, friendsData=friendsData, messageData=messageData)
 
 for gameName,port in scfg.GamePorts.items():
     factory = PacketServiceFactory(config)
@@ -108,6 +112,8 @@ adminRoot.putChild(
     b'ban-remove', admin.BanRemoveResource(adminConfig, config))
 adminRoot.putChild(b'server-ip', admin.ServerIpResource(adminConfig, config))
 adminRoot.putChild(b'ps', admin.ProcessInfoResource(adminConfig, config))
+adminRoot.putChild(b'cups', admin.CupsResource(adminConfig, config))
+adminRoot.putChild(b'send-message', admin.SendMessageResource(adminConfig, config))
 adminServer = Site(adminRoot)
 reactor.listenSSL(adminConfig.AdminPort, adminServer, ServerContextFactory(),
     interface=config.interface)

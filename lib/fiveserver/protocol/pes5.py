@@ -803,9 +803,84 @@ class NetworkMenuService(LoginService):
         self.sendZeros(0x3082,4)
         self.sendZeros(0x3086,0)
 
+    @defer.inlineCallbacks
     def getFriends_4580(self, pkt):
-        self.sendZeros(0x4581,4)
-        self.sendZeros(0x4583,4)
+        self.sendZeros(0x4581, 4)
+        if self.factory.friendsData:
+            friends = yield self.factory.friendsData.getFriends(
+                self._user.profile.id)
+            for profile_id, name in friends:
+                # check if the friend is currently online
+                online_usr = None
+                for usr in self.factory.onlineUsers.values():
+                    try:
+                        if usr.profile.id == profile_id:
+                            online_usr = usr
+                            break
+                    except AttributeError:
+                        pass
+                if online_usr and online_usr.state:
+                    room_id = online_usr.getRoomId()
+                    data = self.formatPlayerInfo(online_usr, room_id)
+                else:
+                    # offline friend — synthesise an entry
+                    data = b'%s%s%s%s%s%s%s' % (
+                        struct.pack('!i', profile_id),
+                        util.padWithZeros(name, 16),
+                        struct.pack('!B', 0),
+                        struct.pack('!i', 0),
+                        struct.pack('!i', 0),
+                        struct.pack('!B', 0),
+                        struct.pack('!B', 0))
+                self.sendData(0x4582, data)
+        self.sendZeros(0x4583, 4)
+        defer.returnValue(None)
+
+    @defer.inlineCallbacks
+    def addFriend_4584(self, pkt):
+        """Client adds a friend by profile ID (best-guess packet 0x4584)."""
+        friend_profile_id = struct.unpack('!i', pkt.data[0:4])[0]
+        if self.factory.friendsData and friend_profile_id > 0:
+            yield self.factory.friendsData.addFriend(
+                self._user.profile.id, friend_profile_id)
+            log.msg('FRIENDS: %s added profile %d' % (
+                self._user.profile.name, friend_profile_id))
+        self.sendZeros(0x4585, 4)
+        defer.returnValue(None)
+
+    @defer.inlineCallbacks
+    def removeFriend_4586(self, pkt):
+        """Client removes a friend by profile ID (best-guess packet 0x4586)."""
+        friend_profile_id = struct.unpack('!i', pkt.data[0:4])[0]
+        if self.factory.friendsData and friend_profile_id > 0:
+            yield self.factory.friendsData.removeFriend(
+                self._user.profile.id, friend_profile_id)
+            log.msg('FRIENDS: %s removed profile %d' % (
+                self._user.profile.name, friend_profile_id))
+        self.sendZeros(0x4587, 4)
+        defer.returnValue(None)
+
+    @defer.inlineCallbacks
+    def addBlocked_4588(self, pkt):
+        """Client blocks a player by profile ID (best-guess packet 0x4588)."""
+        blocked_profile_id = struct.unpack('!i', pkt.data[0:4])[0]
+        if self.factory.friendsData and blocked_profile_id > 0:
+            yield self.factory.friendsData.addBlocked(
+                self._user.profile.id, blocked_profile_id)
+            log.msg('BLOCKED: %s blocked profile %d' % (
+                self._user.profile.name, blocked_profile_id))
+        self.sendZeros(0x4589, 4)
+        defer.returnValue(None)
+
+    @defer.inlineCallbacks
+    def removeBlocked_458a(self, pkt):
+        """Client unblocks a player by profile ID (best-guess packet 0x458a)."""
+        blocked_profile_id = struct.unpack('!i', pkt.data[0:4])[0]
+        if self.factory.friendsData and blocked_profile_id > 0:
+            yield self.factory.friendsData.removeBlocked(
+                self._user.profile.id, blocked_profile_id)
+        self.sendZeros(0x458b, 4)
+        defer.returnValue(None)
 
     @defer.inlineCallbacks
     def setFavouriteTeam_4110(self, pkt):
@@ -821,15 +896,55 @@ class NetworkMenuService(LoginService):
         self.sendZeros(0x4116,4)
         defer.returnValue(None)
 
+    @defer.inlineCallbacks
     def searchPlayers_4600(self, pkt):
         name = util.stripZeros(pkt.data[1:17])
         log.msg('Searching for player: %s' % name)
-        self.sendZeros(0x4601,4)
-        self.sendZeros(0x4603,4)
+        self.sendZeros(0x4601, 4)
+        if name:
+            name_str = name.decode('utf-8', errors='replace')
+            profiles = yield self.factory.profileData.findByNameLike(
+                name_str, limit=20)
+            for profile in profiles:
+                stats = yield self.getStats(profile.id)
+                data = b'\0\0\0\0%s' % self.formatProfileInfo(profile, stats)
+                self.sendData(0x4602, data)
+        self.sendZeros(0x4603, 4)
+        defer.returnValue(None)
 
+    @defer.inlineCallbacks
     def getInboxMessages_4780(self, pkt):
-        self.sendZeros(0x4781,4)
-        self.sendZeros(0x4783,4)
+        self.sendZeros(0x4781, 4)
+        if self.factory.messageData:
+            messages = yield self.factory.messageData.getMessages(
+                self._user.profile.id)
+            for (msg_id, from_id, from_name,
+                 subject, body, read_flag, sent_on) in messages:
+                # Format: msg_id(4) | from_id(4) | from_name(16) |
+                #         read(1) | subject(64) | body(128)
+                data = b'%s%s%s%s%s%s' % (
+                    struct.pack('!i', msg_id),
+                    struct.pack('!i', from_id or 0),
+                    util.padWithZeros(from_name or 'SYSTEM', 16),
+                    struct.pack('!B', 1 if read_flag else 0),
+                    util.padWithZeros(subject or '', 64),
+                    util.padWithZeros(body or '', 128))
+                self.sendData(0x4782, data)
+                # auto-mark as read on retrieval
+                yield self.factory.messageData.markRead(
+                    msg_id, self._user.profile.id)
+        self.sendZeros(0x4783, 4)
+        defer.returnValue(None)
+
+    @defer.inlineCallbacks
+    def deleteInboxMessage_4784(self, pkt):
+        """Client deletes an inbox message (best-guess packet 0x4784)."""
+        msg_id = struct.unpack('!i', pkt.data[0:4])[0]
+        if self.factory.messageData and msg_id > 0:
+            yield self.factory.messageData.deleteMessage(
+                msg_id, self._user.profile.id)
+        self.sendZeros(0x4785, 4)
+        defer.returnValue(None)
 
     def quickMatchSearch_4a00(self, pkt):
         self.sendData(0x4a01,b'\0\0\0\1')  # "no results"
@@ -872,10 +987,15 @@ class NetworkMenuService(LoginService):
         self.addHandler(0x4300, self.getRoomList_4300)
         self.addHandler(0x3080, self.do_3080)
         self.addHandler(0x4580, self.getFriends_4580)
+        self.addHandler(0x4584, self.addFriend_4584)
+        self.addHandler(0x4586, self.removeFriend_4586)
+        self.addHandler(0x4588, self.addBlocked_4588)
+        self.addHandler(0x458a, self.removeBlocked_458a)
         self.addHandler(0x4110, self.setFavouriteTeam_4110)
         self.addHandler(0x4114, self.setFavouritePlayer_4114)
         self.addHandler(0x4600, self.searchPlayers_4600)
         self.addHandler(0x4780, self.getInboxMessages_4780)
+        self.addHandler(0x4784, self.deleteInboxMessage_4784)
         self.addHandler(0x4a00, self.quickMatchSearch_4a00)
         self.addHandler(0x0003, self.disconnect_0003)
         self.addHandler(0x9100, self.do_9100)

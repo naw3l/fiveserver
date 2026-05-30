@@ -18,6 +18,7 @@ import zlib
 from fiveserver.model import packet, user, lobby, util
 from fiveserver.model.util import PacketFormatter
 from fiveserver import log, stream, errors
+from fiveserver.rating import computeElo
 from fiveserver.protocol import PacketDispatcher, isSameGame
 from fiveserver.protocol import pes5
 
@@ -103,9 +104,34 @@ class NewsProtocol(pes5.NewsProtocol):
         self.sendZeros(0x2004,4)
 
     def getWebServerList_2200(self, pkt):
-        self.sendZeros(0x2201,4)
-        #self.sendData(0x2202,data) #TODO
-        self.sendZeros(0x2203,4)
+        """
+        PES6 requests a list of web servers used for in-game HTTP features
+        (rankings, news, etc.).  The response format mirrors the game server
+        list (0x2003): one or more entries of
+            4B type  |  4B subtype  |  32B name  |  16B ip  |  2B port  |
+            2B flags | 2B flags2
+        We expose our own registration/stats web interface so the client has
+        a valid endpoint to talk to.
+        """
+        self.sendZeros(0x2201, 4)
+        try:
+            serverIP = self.factory.configuration.serverIP_wan or '127.0.0.1'
+            webPort = self.factory.serverConfig.WebInterface.get('port', 8190)
+            # Single web server entry: type=1 (stats/rankings), subtype=1
+            name = 'WEB'
+            entry = b'%s%s%s%s%s%s%s' % (
+                struct.pack('!i', 1),
+                struct.pack('!i', 1),
+                name.encode('utf-8') + b'\0' * (32 - len(name)),
+                serverIP.encode('utf-8') + b'\0' * (16 - len(serverIP)),
+                struct.pack('!H', webPort),
+                struct.pack('!H', 0),
+                struct.pack('!H', 0),
+            )
+            self.sendData(0x2202, entry)
+        except Exception as e:
+            log.msg('WARN: Could not build web server list: %s' % e)
+        self.sendZeros(0x2203, 4)
 
 
 class RosterHandler:
@@ -274,11 +300,11 @@ class MainService(RosterHandler, pes5.MainService):
                 b'comment': util.padWithZeros((
                     profile.comment or 'Fiveserver rules!'), 256),
                 b'rank': struct.pack('!i',profile.rank),
-                b'competition-gold-medals': struct.pack('!H', 0),
-                b'competition-silver-medals': struct.pack('!H', 0),
+                b'competition-gold-medals': struct.pack('!H', profile.competition_gold),
+                b'competition-silver-medals': struct.pack('!H', profile.competition_silver),
                 b'unknown1': struct.pack('!H', 0),
-                b'winnerscup-gold-medals': struct.pack('!H', 0),
-                b'winnerscup-silver-medals': struct.pack('!H', 0),
+                b'winnerscup-gold-medals': struct.pack('!H', profile.winnerscup_gold),
+                b'winnerscup-silver-medals': struct.pack('!H', profile.winnerscup_silver),
                 b'unknown2': struct.pack('!H', 0),
                 b'unknown3': struct.pack('!B', 0),
                 b'language': struct.pack('!B', 0),
@@ -397,17 +423,36 @@ class MainService(RosterHandler, pes5.MainService):
         """
         room = self._user.state.room
         n = len(room.participatingPlayers)
+        match = room.match
+
+        def _pts(profile_id):
+            if match:
+                old = match.old_points.get(profile_id, 0)
+                new = match.new_points.get(profile_id, old)
+            else:
+                old, new = 0, 0
+            added = max(0, new - old)
+            return old, new, added
+
+        def _rating(profile_id, profile):
+            if match:
+                old = match.old_rating.get(profile_id, profile.rating)
+                new = match.new_rating.get(profile_id, profile.rating)
+            else:
+                old = new = profile.rating
+            return old, new
+
         data = b'\0\0\0\0%s%s%s' % (
             b''.join([b'%s%s%s%s%s%s%s%s%s' % (
-                struct.pack('!i',usr.profile.id),
-                struct.pack('!H',0), # added points
-                struct.pack('!i',0), # new points
-                struct.pack('!H',0), # ?
-                struct.pack('!H',0), # ?
-                struct.pack('!H',0), # ?
-                struct.pack('!H',0), # ?
-                struct.pack('!H',0), # new rating
-                struct.pack('!H',0)) # old rating
+                struct.pack('!i', usr.profile.id),
+                struct.pack('!H', _pts(usr.profile.id)[2]),   # added points
+                struct.pack('!i', _pts(usr.profile.id)[1]),   # new points
+                struct.pack('!H', 0),
+                struct.pack('!H', 0),
+                struct.pack('!H', 0),
+                struct.pack('!H', 0),
+                struct.pack('!H', _rating(usr.profile.id, usr.profile)[1]),  # new rating
+                struct.pack('!H', _rating(usr.profile.id, usr.profile)[0]))  # old rating
                 for usr in room.participatingPlayers]),
             b'\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0'*(4-n),
             b''.join([b'%s%s%s%s%s%s' % (
@@ -971,12 +1016,33 @@ class MainService(RosterHandler, pes5.MainService):
         thisLobby = self.factory.getLobbies()[
             self._user.state.lobbyId]
         if thisLobby.typeCode != 0x20: # no-stats
-            # record the match in DB
-            yield self.factory.matchData.store(match)
             participants = [match.teamSelection.home_captain,
                 match.teamSelection.away_captain]
             participants.extend(match.teamSelection.home_more_players)
             participants.extend(match.teamSelection.away_more_players)
+            # snapshot points/rating synchronously before any DB yields so
+            # backToMatchMenu_4383 always has correct old values
+            for profile in participants:
+                match.old_points[profile.id] = profile.points
+                match.old_rating[profile.id] = profile.rating
+            # record the match in DB
+            match_id = yield self.factory.matchData.store(match)
+            # compute Elo ratings using old (pre-match) ratings
+            home_players = [match.teamSelection.home_captain] + \
+                list(match.teamSelection.home_more_players)
+            away_players = [match.teamSelection.away_captain] + \
+                list(match.teamSelection.away_more_players)
+            home_avg = (sum(match.old_rating.get(p.id, 0) or 1000
+                           for p in home_players) // len(home_players))
+            away_avg = (sum(match.old_rating.get(p.id, 0) or 1000
+                           for p in away_players) // len(away_players))
+            new_home_elo, new_away_elo = computeElo(
+                home_avg, away_avg,
+                match.score_home, match.score_away)
+            for p in home_players:
+                p.rating = new_home_elo
+            for p in away_players:
+                p.rating = new_away_elo
             for profile in participants:
                 # update player play time
                 profile.playTime += duration
@@ -984,10 +1050,44 @@ class MainService(RosterHandler, pes5.MainService):
                 stats = yield self.getStats(profile.id)
                 rm = self.factory.ratingMath
                 profile.points = rm.getPoints(stats)
+                match.new_points[profile.id] = profile.points
+                match.new_rating[profile.id] = profile.rating
                 # store updated profile
                 yield self.factory.storeProfile(profile)
+            # check if this match is part of an active cup
+            yield self._checkCupMatch(match, match_id)
         else:
             yield defer.succeed(None)
+
+    @defer.inlineCallbacks
+    def _checkCupMatch(self, match, match_id):
+        """
+        After a regular match is recorded, check whether the two captains
+        have a pending cup match against each other. If so, record the cup
+        match result and advance the bracket automatically.
+        """
+        cup_data = getattr(self.factory, 'cupData', None)
+        if cup_data is None:
+            return
+        home_id = match.teamSelection.home_captain.id
+        away_id = match.teamSelection.away_captain.id
+        cup_match = yield cup_data.getPendingCupMatch(home_id, away_id)
+        if cup_match is None:
+            defer.returnValue(None)
+            return
+        cup_match_id = cup_match[0]
+        if match.score_home > match.score_away:
+            winner_id = home_id
+        elif match.score_away > match.score_home:
+            winner_id = away_id
+        else:
+            # draw — cup matches cannot be draws; home captain wins on away goals
+            # (admin can override with walkover if needed)
+            log.msg('CUP: Match %d ended in draw — home captain wins by default' % match_id)
+            winner_id = home_id
+        log.msg('CUP: Recording cup match %d result — winner profile %d' % (
+            cup_match_id, winner_id))
+        yield cup_data.recordCupMatchResult(cup_match_id, match_id, winner_id)
 
     def matchStateUpdate_4377(self, pkt):
         state = struct.unpack('!B', pkt.data[0:1])[0]

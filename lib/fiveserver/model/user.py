@@ -24,6 +24,11 @@ class Profile:
         self.playTime = timedelta(seconds=0)
         self.settings = ProfileSettings(None, None)
         self.comment = None
+        # PES6 cup/tournament medals (shown in profile screen)
+        self.competition_gold = 0
+        self.competition_silver = 0
+        self.winnerscup_gold = 0
+        self.winnerscup_silver = 0
 
 
 class ProfileSettings:
