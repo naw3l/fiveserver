@@ -16,8 +16,11 @@ from fiveserver.protocol import pes5, pes6
 from fiveserver.register import RegistrationResource
 from fiveserver import storagecontroller, log
 from fiveserver import admin, data, data6, logic
-import pymysql
-pymysql.install_as_MySQLdb()
+try:
+    import pymysql
+    pymysql.install_as_MySQLdb()
+except ImportError:
+    pass  # mysqlclient is installed instead
 import os
 
 
