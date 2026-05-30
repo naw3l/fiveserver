@@ -16,6 +16,8 @@ from fiveserver.protocol import pes5, pes6
 from fiveserver.register import RegistrationResource
 from fiveserver import storagecontroller, log
 from fiveserver import admin, data, logic
+import pymysql
+pymysql.install_as_MySQLdb()
 import os
 
 

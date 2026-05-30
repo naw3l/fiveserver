@@ -4,7 +4,7 @@ Configuration classes for packet server
 
 
 from twisted.internet import reactor, defer
-from twisted.web import client
+from twisted.web.client import Agent, readBody
 from xml.dom import minidom
 from datetime import datetime, timedelta
 import time
@@ -373,7 +373,10 @@ class FiveServerConfig:
             self.serverConfig.ServerIP = None
         if self.serverConfig.ServerIP in [None,'auto']:
             # try to determine the WAN address
-            d = client.getPage(self.ipDetectUri.encode('utf-8'), timeout=10)
+            agent = Agent(reactor)
+            d = agent.request(
+                b'GET', self.ipDetectUri.encode('utf-8'))
+            d.addCallback(readBody)
         else:
             # explicitly set in configuration file
             d = defer.succeed(self.serverConfig.ServerIP)

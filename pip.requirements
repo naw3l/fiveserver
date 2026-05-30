@@ -1,6 +1,9 @@
-mysqlclient
+# MySQL driver: mysqlclient (recommended, needs libmysqlclient-dev)
+# or PyMySQL (pure Python, no build deps, slower)
+# mysqlclient
+PyMySQL
 PyYAML
-Twisted==20.3.0
+Twisted
 pyOpenSSL
 pycryptodome
 zope.interface
