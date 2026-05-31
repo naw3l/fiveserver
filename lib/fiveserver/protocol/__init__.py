@@ -146,5 +146,6 @@ class PacketDispatcher(PacketReceiver):
         Override this if you want behaviour
         different from simply ignoring the packet
         """
-        pass
+        log.msg('UNHANDLED packet: id=0x%04x len=%d' % (
+            pkt.header.id, len(pkt.data)))
 
