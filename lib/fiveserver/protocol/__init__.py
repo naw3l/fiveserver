@@ -136,6 +136,8 @@ class PacketDispatcher(PacketReceiver):
         raise errors.NotImplementedError 
 
     def packetReceived(self, pkt):
+        log.msg('PKT IN: id=0x%04x len=%d service=%s' % (
+            pkt.header.id, len(pkt.data), self.__class__.__name__))
         handler = self._handlers.get(pkt.header.id)
         if handler is not None:
             return handler(pkt)

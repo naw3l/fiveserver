@@ -451,7 +451,7 @@ class LoginService(PacketDispatcher):
         log.msg('do_9104 %s' % pkt)
 
     def do_9300(self, pkt):
-        self.sendData(0x9303,b'\xff\xff\xff\x10')
+        self.sendZeros(0x9303,4)
         self.sendZeros(0x9301,0)
         self.sendZeros(0x9302,0)
         self.sendZeros(0x9303,0)
