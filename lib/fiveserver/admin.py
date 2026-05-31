@@ -825,22 +825,36 @@ class CupsResource(BaseXmlResource):
 
     def render_GET(self, request):
         def _render(rows):
-            cups = domish.Element((None, 'cups'))
-            cups['href'] = '/home'
-            cups['create-href'] = '/cups'
+            rows_html = ''
             for row in rows:
                 id, name, cup_type, status, created_on, finished_on = row
-                e = cups.addElement('cup')
-                e['id'] = str(id)
-                e['name'] = escape(name)
-                e['type'] = cup_type
-                e['status'] = status
-                e['created'] = str(created_on)
-                e['href'] = '/cups/%d' % id
-                if finished_on:
-                    e['finished'] = str(finished_on)
-            request.setHeader('Content-Type', 'text/xml')
-            request.write(('%s%s' % (XML_HEADER, cups.toXml())).encode('utf-8'))
+                finished = str(finished_on) if finished_on else '-'
+                rows_html += (
+                    '<tr><td><a href="/cups/%d">%s</a></td>'
+                    '<td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>'
+                    % (id, escape(name), cup_type, status, str(created_on), finished))
+            html = '''<!DOCTYPE html><html><head><title>Cups</title>
+<style>body{font-family:Arial,sans-serif;margin:2em}
+table{border-collapse:collapse;width:100%%}
+th,td{border:1px solid #ccc;padding:6px 10px;text-align:left}
+th{background:#f0f0f0}a{color:#080}
+input,select{margin:4px;padding:4px}
+h2{margin-top:1.5em}</style></head><body>
+<h1>Cups</h1>
+<table><tr><th>Name</th><th>Type</th><th>Status</th><th>Created</th><th>Finished</th></tr>
+%s</table>
+<h2>Create Cup</h2>
+<form method="POST">
+Name: <input name="name" type="text" size="30" required/>
+Type: <select name="type">
+  <option value="winnerscup">Winners Cup</option>
+  <option value="competition">Competition</option>
+</select>
+<input type="submit" value="Create"/>
+</form>
+</body></html>''' % rows_html
+            request.setHeader('Content-Type', 'text/html')
+            request.write(html.encode('utf-8'))
             request.finish()
         d = self.config.cupData.listCups()
         d.addCallback(_render)
@@ -849,9 +863,8 @@ class CupsResource(BaseXmlResource):
 
     def render_POST(self, request):
         def _render(cup_id):
-            request.setHeader('Content-Type', 'text/xml')
-            request.write(('%s<cupCreated id="%d" href="/cups/%d"/>' % (
-                XML_HEADER, cup_id, cup_id)).encode('utf-8'))
+            request.setResponseCode(302)
+            request.setHeader('Location', '/cups/%d' % cup_id)
             request.finish()
         try:
             name = request.args[b'name'][0].decode('utf-8')
@@ -895,53 +908,85 @@ class CupDetailResource(BaseXmlResource):
             cup_row, participants, matches = results
             if cup_row is None:
                 request.setResponseCode(404)
-                request.write(('%s<error text="cup not found"/>' % XML_HEADER).encode('utf-8'))
+                request.setHeader('Content-Type', 'text/html')
+                request.write(b'<h1>Cup not found</h1>')
                 request.finish()
                 return
             id, name, cup_type, status, created_on, finished_on = cup_row
-            cup = domish.Element((None, 'cup'))
-            cup['id'] = str(id)
-            cup['name'] = escape(name)
-            cup['type'] = cup_type
-            cup['status'] = status
-            cup['created'] = str(created_on)
-            cup['add-participant-href'] = '/cups/%d/add' % id
-            if status == 'open':
-                cup['activate-href'] = '/cups/%d/activate' % id
-            if finished_on:
-                cup['finished'] = str(finished_on)
 
-            ps = cup.addElement('participants')
+            names = {pid: pname for pid, pname, _, _ in participants}
+
+            participants_html = ''
             for profile_id, pname, points, pstatus in participants:
-                e = ps.addElement('participant')
-                e['profile-id'] = str(profile_id)
-                e['name'] = escape(pname)
-                e['points'] = str(points)
-                e['status'] = pstatus
-                e['remove-href'] = '/cups/%d/remove?profile_id=%d' % (id, profile_id)
+                participants_html += (
+                    '<tr><td>%s</td><td>%d</td><td>%s</td>'
+                    '<td><form method="POST" action="/cups/%d/remove" style="margin:0">'
+                    '<input type="hidden" name="profile_id" value="%d"/>'
+                    '<input type="submit" value="Remove"/></form></td></tr>'
+                    % (escape(pname), points, pstatus, id, profile_id))
 
-            bracket = cup.addElement('bracket')
+            rounds = {}
             for row in matches:
                 (mid, cup_id, match_id, rnd,
                  home_id, away_id, winner_id, mstatus, played_on) = row
-                e = bracket.addElement('match')
-                e['id'] = str(mid)
-                e['round'] = str(rnd)
-                e['home-profile-id'] = str(home_id)
-                e['away-profile-id'] = str(away_id)
-                e['status'] = mstatus
-                if winner_id:
-                    e['winner-profile-id'] = str(winner_id)
-                if match_id:
-                    e['match-id'] = str(match_id)
-                if played_on:
-                    e['played-on'] = str(played_on)
-                if mstatus == 'pending':
-                    e['walkover-href'] = (
-                        '/cups/%d/walkover?cup_match_id=%d' % (id, mid))
+                rounds.setdefault(rnd, []).append(row)
 
-            request.setHeader('Content-Type', 'text/xml')
-            request.write(('%s%s' % (XML_HEADER, cup.toXml())).encode('utf-8'))
+            bracket_html = ''
+            for rnd in sorted(rounds):
+                bracket_html += '<h3>Round %d</h3><table><tr><th>Home</th><th>Away</th><th>Winner</th><th>Status</th><th>Played</th><th></th></tr>' % rnd
+                for row in rounds[rnd]:
+                    (mid, cup_id, match_id, rnd2,
+                     home_id, away_id, winner_id, mstatus, played_on) = row
+                    home_name = escape(names.get(home_id, str(home_id)))
+                    away_name = escape(names.get(away_id, str(away_id)))
+                    winner_name = escape(names.get(winner_id, '-')) if winner_id else '-'
+                    played = str(played_on) if played_on else '-'
+                    walkover_btn = ''
+                    if mstatus == 'pending':
+                        walkover_btn = '<a href="/cups/%d/walkover?cup_match_id=%d">Walkover</a>' % (id, mid)
+                    bracket_html += (
+                        '<tr><td>%s</td><td>%s</td><td>%s</td>'
+                        '<td>%s</td><td>%s</td><td>%s</td></tr>'
+                        % (home_name, away_name, winner_name, mstatus, played, walkover_btn))
+                bracket_html += '</table>'
+
+            activate_btn = ''
+            if status == 'open':
+                activate_btn = '''<form method="POST" action="/cups/%d/activate">
+<input type="submit" value="Activate Cup (lock roster &amp; generate bracket)"/>
+</form>''' % id
+
+            finished_str = ('Finished: %s' % finished_on) if finished_on else ''
+
+            html = '''<!DOCTYPE html><html><head><title>Cup: {name}</title>
+<style>body{{font-family:Arial,sans-serif;margin:2em}}
+table{{border-collapse:collapse;margin-bottom:1em}}
+th,td{{border:1px solid #ccc;padding:6px 10px;text-align:left}}
+th{{background:#f0f0f0}}a{{color:#080}}
+input,select{{margin:4px;padding:4px}}
+h2{{margin-top:1.5em}}</style></head><body>
+<a href="/cups">&larr; All Cups</a>
+<h1>{name} <small style="font-size:0.6em;color:#666">{cup_type} &mdash; {status}</small></h1>
+<p>Created: {created} {finished}</p>
+{activate_btn}
+<h2>Participants</h2>
+<table><tr><th>Name</th><th>Points</th><th>Status</th><th></th></tr>
+{participants_html}</table>
+<h3>Add Participant</h3>
+<form method="POST" action="/cups/{id}/add">
+Profile name: <input name="profile_name" type="text" size="30" required/>
+<input type="submit" value="Add"/>
+</form>
+<h2>Bracket</h2>
+{bracket_html}
+</body></html>'''.format(
+                name=escape(name), cup_type=cup_type, status=status,
+                created=str(created_on), finished=finished_str,
+                activate_btn=activate_btn, participants_html=participants_html,
+                id=id, bracket_html=bracket_html or '<p>Not yet generated.</p>')
+
+            request.setHeader('Content-Type', 'text/html')
+            request.write(html.encode('utf-8'))
             request.finish()
 
         d.addCallback(_render)
@@ -984,9 +1029,8 @@ Profile name: <input name="profile_name" type="text" size="32"/>
 
     def render_POST(self, request):
         def _added(_):
-            request.setHeader('Content-Type', 'text/xml')
-            request.write(('%s<actionAccepted href="/cups/%d"/>' % (
-                XML_HEADER, self.cup_id)).encode('utf-8'))
+            request.setResponseCode(302)
+            request.setHeader('Location', '/cups/%d' % self.cup_id)
             request.finish()
 
         def _gotProfile(profiles):
@@ -1036,9 +1080,8 @@ class CupRemoveParticipantResource(BaseXmlResource):
 
     def render_POST(self, request):
         def _done(_):
-            request.setHeader('Content-Type', 'text/xml')
-            request.write(('%s<actionAccepted href="/cups/%d"/>' % (
-                XML_HEADER, self.cup_id)).encode('utf-8'))
+            request.setResponseCode(302)
+            request.setHeader('Location', '/cups/%d' % self.cup_id)
             request.finish()
         try:
             profile_id = int(request.args[b'profile_id'][0])
@@ -1072,13 +1115,12 @@ class CupActivateResource(BaseXmlResource):
         def _done(ok):
             if not ok:
                 request.setResponseCode(400)
-                request.setHeader('Content-Type', 'text/xml')
-                request.write(('%s<error text="need at least 2 participants"/>' % XML_HEADER).encode('utf-8'))
+                request.setHeader('Content-Type', 'text/html')
+                request.write(b'<h1>Error: need at least 2 participants</h1>')
                 request.finish()
                 return
-            request.setHeader('Content-Type', 'text/xml')
-            request.write(('%s<actionAccepted href="/cups/%d"/>' % (
-                XML_HEADER, self.cup_id)).encode('utf-8'))
+            request.setResponseCode(302)
+            request.setHeader('Location', '/cups/%d' % self.cup_id)
             request.finish()
         d = self.config.cupData.activateCup(self.cup_id)
         d.addCallback(_done)
@@ -1100,20 +1142,50 @@ class CupWalkoverResource(BaseXmlResource):
             cup_match_id = int(request.args[b'cup_match_id'][0])
         except (KeyError, ValueError):
             return ('%s<error text="cup_match_id required"/>' % XML_HEADER).encode('utf-8')
-        request.setHeader('Content-Type', 'text/html')
-        return ('''<html><head><title>Cup Walkover</title></head><body>
-<h3>Grant walkover for cup match %d</h3>
+
+        d = defer.gatherResults([
+            self.config.cupData.getCupParticipants(self.cup_id),
+            self.config.cupData.getCupMatches(self.cup_id),
+        ])
+
+        def _render(results):
+            participants, matches = results
+            names = {pid: pname for pid, pname, _, _ in participants}
+            match_row = next((r for r in matches if r[0] == cup_match_id), None)
+            if match_row is None:
+                request.setHeader('Content-Type', 'text/html')
+                request.write(b'<h1>Match not found</h1>')
+                request.finish()
+                return
+            (mid, _, _, rnd, home_id, away_id, _, _, _) = match_row
+            home_name = escape(names.get(home_id, str(home_id)))
+            away_name = escape(names.get(away_id, str(away_id)))
+            html = ('''<!DOCTYPE html><html><head><title>Cup Walkover</title></head><body>
+<a href="/cups/%d">&larr; Back to Cup</a>
+<h3>Grant walkover for match: %s vs %s</h3>
 <form method="POST">
 <input type="hidden" name="cup_match_id" value="%d"/>
-Winner profile id: <input name="winner_profile_id" type="text" size="12"/>
+Winner: <select name="winner_profile_id">
+<option value="%d">%s</option>
+<option value="%d">%s</option>
+</select>
 <input type="submit" value="Grant Walkover"/>
-</form></body></html>''' % (cup_match_id, cup_match_id)).encode('utf-8')
+</form></body></html>''' % (
+                self.cup_id, home_name, away_name,
+                cup_match_id,
+                home_id, home_name, away_id, away_name))
+            request.setHeader('Content-Type', 'text/html')
+            request.write(html.encode('utf-8'))
+            request.finish()
+
+        d.addCallback(_render)
+        d.addErrback(self.renderError, request)
+        return server.NOT_DONE_YET
 
     def render_POST(self, request):
         def _done(_):
-            request.setHeader('Content-Type', 'text/xml')
-            request.write(('%s<actionAccepted href="/cups/%d"/>' % (
-                XML_HEADER, self.cup_id)).encode('utf-8'))
+            request.setResponseCode(302)
+            request.setHeader('Location', '/cups/%d' % self.cup_id)
             request.finish()
         try:
             cup_match_id = int(request.args[b'cup_match_id'][0])
